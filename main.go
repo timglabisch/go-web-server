@@ -1,58 +1,92 @@
 package main
 
 import (
-	"fmt"
-	"net"
-	"os"
-	"strconv"
+//	"fmt"
+//	"os"
+//	"strconv"
 	"./memcache"
 	"runtime"
+	"http"
+	"log"
+//	"net"
+	"url"
+	"io/ioutil"
 )
 
+// build mem map
+var Repos memcache.MemMap = memcache.MemMap{};	
+var Client http.Client = http.Client{};
 func main() {
 	
 	runtime.GOMAXPROCS(4);
 	
-	// build mem map
-	repos := memcache.MemMap{};	
-	repos.InitMap();
-	
-	// add a test item
-	foo := memcache.MemMapItem{Key: "foo"};   
-	repos.Add(&foo);
-	
-	listener, err := net.ListenTCP("tcp", &net.TCPAddr{Port: 12345});
+	Repos.InitMap();		
+
+	http.Handle("/", http.HandlerFunc(handleHttp))
+	err := http.ListenAndServe("0.0.0.0:12345", nil)
 	
 	if err != nil {
-		fmt.Println("painic");
-		os.Exit(1);
-	}
-	
-	for {
-		con, err := listener.AcceptTCP();
-		if err != nil {
-			fmt.Println("painic!");
-			continue;
-		}
-		go handle(con, &repos);
-	}
-	
+		log.Fatal("ListenAndServe: ", err.String())
+	}	
 }
 
-func handle(con *net.TCPConn, memRepos *memcache.MemMap) {
+func getNewUrl(url *url.URL) (*url.URL) {
+	urlBackend, _ := url.Parse("http://127.0.0.1");
+	url.Scheme = urlBackend.Scheme;
+	url.Host = urlBackend.Host;
+	return url;
+}
+
+func getContent(url *url.URL, req *http.Request) (*memcache.MemMapItem) {
+
+	cacheToken := url.String();
+
+	cached := Repos.GetByKey(cacheToken);
+	if(cached != nil) {
+		return cached;
+	}
+	backendUrl := getNewUrl(url);
 	
-	defer con.Close();
+	newReq := http.Request {
+		Method : "GET",
+		RawURL : backendUrl.String(),
+		URL : backendUrl,
+		Proto : "HTTP/1.1",
+		ProtoMajor : 1,
+		ProtoMinor : 0,
+		RemoteAddr : "192.168.0.21",
+	}
+
+	newReq.Header = http.Header{};
+	newReq.Header.Add("Accept", "*/*");
+	newReq.Header.Add("Accept-Charset", "utf-8,ISO-8859-1;q=0.7,*;q=0.3");
+	newReq.Header.Add("Accept-Encoding", "utf-8");
+	newReq.Header.Add("Host", backendUrl.Host);
 	
-	body := memRepos.GetByKey("foo").Key;
+	//newReq = ResponseWriter{};
+
+	response, err := Client.Do(&newReq);
+
+	if err != nil {
+		log.Fatal("error: ", err.String())
+	}
+
+	cacheItem := memcache.MemMapItem{Key: cacheToken};
+	cacheItem.Raw, _ = ioutil.ReadAll(response.Body);
+	cacheItem.Head = response.Header;
+
+	Repos.Add(&cacheItem);
 	
-	con.SetWriteBuffer(0);
-	
-	con.Write([]byte("HTTP/1.1 200 OK\n"));
-	con.Write([]byte("Content-Lengt: " + strconv.Itoa(len(body)) + "\n"));
-	con.Write([]byte("Connection: close\n"));
-	con.Write([]byte("Content-Type: text/html; charset=utf-8\n"));
-	con.Write([]byte("\n"));
-	
-	con.Write([]byte(body));
-	con.CloseWrite();
+	return &cacheItem ;
+}
+
+func handleHttp(w http.ResponseWriter, req *http.Request) {
+
+	content := getContent(req.URL, req);
+		
+	for index, it := range content.Head {
+		w.Header().Set(index, it[0]);
+	}
+
+	w.Write(content.Raw);
 }

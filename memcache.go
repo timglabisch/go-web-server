@@ -1,7 +1,15 @@
 package memcache
 
+import (
+	"fmt"
+	"sync"
+	"http"
+)
+
+var RepoLock sync.RWMutex;
+
 type MemMap struct {
-	items map[string]*MemMapItem
+	Items map[string]*MemMapItem
 }
 
 type MemMapItem struct {
@@ -9,16 +17,29 @@ type MemMapItem struct {
 	Gzip []byte
 	Expire []byte
 	Key string
+	Head http.Header
 }
 
 func (m *MemMap)InitMap() {
-	m.items = make(map[string] *MemMapItem, 100); 
+	m.Items = make(map[string] *MemMapItem, 100);
 }
 
-func (m *MemMap) Add(item *MemMapItem) {
-	m.items[item.Key] = item;
+func (m *MemMap) Add(v *MemMapItem) {
+	RepoLock.Lock();
+	m.Items[v.Key] = v;
+	RepoLock.Unlock();
+	fmt.Print("+")
 }
 
-func (m *MemMap) GetByKey(key string) *MemMapItem {
-	return m.items[key];
+func (m *MemMap) GetByKey(key string) (*MemMapItem) {
+	RepoLock.RLock();
+	defer RepoLock.RUnlock();
+	if mapRet, ok := m.Items[key]; ok {
+		fmt.Print(".")
+		return mapRet;
+	}
+ 
+	fmt.Print("-")
+	return nil;
 }
+
